@@ -33,6 +33,19 @@ const conversationSchema = new mongoose.Schema(
       },
     ],
 
+    admins: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     name: {
       type: String,
       default: null, // group name

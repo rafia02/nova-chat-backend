@@ -6,9 +6,12 @@ import { connectDB } from "./config/db";
 import { env } from "./config/env";
 
 import { initSocket } from "./socket/socket";
+import { setupSocket } from "./socket/socket.handler";
+import { cleanupCallsAfterRestart } from "./socket/call.service";
 
 const startServer = async () => {
   await connectDB();
+  await cleanupCallsAfterRestart();
 
   const httpServer = http.createServer(app);
 
@@ -20,6 +23,7 @@ const startServer = async () => {
   });
 
   initSocket(io);
+  setupSocket(io);
 
   httpServer.listen(env.PORT, () => {
     console.log(`🚀 Server running on ${env.PORT}`);

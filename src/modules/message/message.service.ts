@@ -153,13 +153,24 @@ import { areFriends } from "../friend/friend.service";
 /* ---------------------------
    SOCKET HELPER (CLEAN)
 ----------------------------*/
-const emitToConversation = (
+const emitToConversation = async (
   conversationId: string,
   event: string,
   data: any,
 ) => {
   const io = getIO();
-  io.to(`conversation:${conversationId}`).emit(event, data);
+  const conversation =
+    await Conversation.findById(conversationId).select("participants");
+  if (!conversation) return;
+  const participantIds = [
+    ...new Set(conversation.participants.map((id) => id.toString())),
+  ];
+  if (participantIds.length === 0) return;
+  let target = io.to(`user:${participantIds[0]}`);
+  for (const participantId of participantIds.slice(1)) {
+    target = target.to(`user:${participantId}`);
+  }
+  target.emit(event, data);
 };
 
 /* ---------------------------
@@ -170,7 +181,8 @@ export const sendMessage = async (
   conversationId: string,
   content: string,
   replyTo?: any,
-  media?: any, // 🔥 future support (image/video/file)
+  media?: any,
+  clientMessageId?: string,
 ) => {
   if (!/^[0-9a-fA-F]{24}$/.test(conversationId)) {
     throw new ApiError(400, "Invalid conversation ID");
@@ -183,6 +195,41 @@ export const sendMessage = async (
     )
   ) {
     throw new ApiError(403, "Not a conversation participant");
+  }
+
+  const attachments = Array.isArray(media) ? media : media ? [media] : [];
+  const messageContent = typeof content === "string" ? content.trim() : "";
+  if (messageContent.length > 10_000)
+    throw new ApiError(400, "Message is too long");
+  if (messageContent.length === 0 && attachments.length === 0) {
+    throw new ApiError(400, "A message or attachment is required");
+  }
+  if (attachments.length > 10)
+    throw new ApiError(400, "Maximum 10 attachments per message");
+  if (
+    clientMessageId &&
+    (typeof clientMessageId !== "string" || clientMessageId.length > 128)
+  ) {
+    throw new ApiError(400, "Invalid client message ID");
+  }
+
+  if (clientMessageId) {
+    const existing = await Message.findOne({
+      conversationId,
+      senderId,
+      clientMessageId,
+    });
+    if (existing) {
+      if (
+        conversation.type === "dm" &&
+        (conversation.requestStatus === "rejected" ||
+          (conversation.requestStatus === "pending" &&
+            conversation.requestedBy?.toString() !== senderId))
+      ) {
+        throw new ApiError(403, "This conversation is not available");
+      }
+      return existing;
+    }
   }
 
   let isMessageRequest = false;
@@ -239,18 +286,70 @@ export const sendMessage = async (
     }
   }
 
-  const message = await Message.create({
-    senderId,
-    conversationId,
-    content,
-    replyTo,
-    media,
-  });
+  let message;
+  try {
+    message = await Message.create({
+      senderId,
+      conversationId,
+      content: messageContent,
+      replyTo,
+      media: attachments[0]
+        ? {
+            url: attachments[0].url,
+            name: attachments[0].filename ?? attachments[0].name,
+            type: attachments[0].type,
+          }
+        : undefined,
+      attachments,
+      clientMessageId,
+    });
+  } catch (error: any) {
+    if (error.code !== 11000 || !clientMessageId) throw error;
+    const existing = await Message.findOne({
+      conversationId,
+      senderId,
+      clientMessageId,
+    });
+    if (existing) return existing;
+    throw error;
+  }
 
-  await Conversation.findByIdAndUpdate(conversationId, {
-    lastMessage: media ? "📎 Media" : content,
-    lastMessageAt: new Date(),
-  });
+  const preview =
+    attachments.length > 0
+      ? attachments[0].type === "audio"
+        ? "Voice message"
+        : "Attachment"
+      : messageContent;
+  const conversationFilter: Record<string, unknown> = {
+    _id: conversationId,
+    participants: senderId,
+  };
+  if (conversation.type === "dm") {
+    if (isMessageRequest) {
+      conversationFilter.requestStatus = "pending";
+      conversationFilter.requestedBy = senderId;
+    } else {
+      conversationFilter.requestStatus = "normal";
+    }
+  }
+  let updatedConversation;
+  try {
+    updatedConversation = await Conversation.findOneAndUpdate(
+      conversationFilter,
+      { $set: { lastMessage: preview, lastMessageAt: new Date() } },
+      { new: true },
+    );
+  } catch (error) {
+    await Message.deleteOne({ _id: message._id });
+    throw error;
+  }
+  if (!updatedConversation) {
+    await Message.deleteOne({ _id: message._id });
+    throw new ApiError(
+      403,
+      "Conversation access changed; send the message again",
+    );
+  }
 
   if (isMessageRequest && requestRecipientId) {
     getIO()
@@ -261,11 +360,39 @@ export const sendMessage = async (
         senderId,
       });
   } else {
-    emitToConversation(conversationId, SERVER_EVENTS.MESSAGE_NEW, message);
-    emitToConversation(conversationId, SERVER_EVENTS.MESSAGE_DELIVERED, {
-      messageId: message._id,
+    const currentConversation =
+      await Conversation.findById(conversationId).select("participants");
+    const recipientIds =
+      currentConversation?.participants
+        .map((participant) => participant.toString())
+        .filter((participantId) => participantId !== senderId) ?? [];
+    const io = getIO();
+    const onlineRecipients = await Promise.all(
+      recipientIds.map(
+        async (recipientId) =>
+          (await io.in(`user:${recipientId}`).fetchSockets()).length > 0,
+      ),
+    );
+    if (onlineRecipients.some(Boolean)) {
+      message.status = "delivered";
+      await message.save();
+    }
+    await emitToConversation(
       conversationId,
-    });
+      SERVER_EVENTS.MESSAGE_NEW,
+      message,
+    );
+    if (message.status === "delivered") {
+      await emitToConversation(
+        conversationId,
+        SERVER_EVENTS.MESSAGE_DELIVERED,
+        {
+          messageId: message._id,
+          conversationId,
+          status: message.status,
+        },
+      );
+    }
   }
 
   return message;
@@ -292,23 +419,22 @@ export const getMessages = async (
   ) {
     throw new ApiError(403, "Not a conversation participant");
   }
-  if (
-    conversation.requestStatus === "rejected" ||
-    (conversation.requestStatus === "pending" &&
-      conversation.requestedBy?.toString() !== userId)
-  ) {
+  if (conversation.requestStatus === "rejected") {
     throw new ApiError(
       403,
-      "Messages are unavailable until the request is accepted",
+      "Messages are unavailable because the request was rejected",
     );
   }
 
-  const skip = (page - 1) * limit;
+  const safePage = Number.isInteger(page) && page > 0 ? page : 1;
+  const safeLimit =
+    Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 20;
+  const skip = (safePage - 1) * safeLimit;
 
   const messages = await Message.find({ conversationId })
     .sort({ createdAt: -1 })
     .skip(skip)
-    .limit(limit);
+    .limit(safeLimit);
 
   return messages.reverse();
 };
@@ -334,7 +460,7 @@ export const editMessage = async (
 
   await message.save();
 
-  emitToConversation(
+  await emitAuthorizedMessageEvent(
     message.conversationId.toString(),
     SERVER_EVENTS.MESSAGE_UPDATED,
     message,
@@ -360,7 +486,7 @@ export const deleteMessage = async (messageId: string, userId: string) => {
 
   await message.save();
 
-  emitToConversation(
+  await emitAuthorizedMessageEvent(
     message.conversationId.toString(),
     SERVER_EVENTS.MESSAGE_DELETED,
     {
@@ -385,30 +511,62 @@ export const reactMessage = async (
   if (!message) throw new ApiError(404, "Message not found");
   await assertMessageAccess(message.conversationId.toString(), userId);
 
-  const existing = message.reactions.find(
-    (r: any) => r.userId === userId && r.emoji === emoji,
-  );
-
-  if (existing) {
-    message.set(
-      "reactions",
-      message.reactions.filter(
-        (r: any) => !(r.userId === userId && r.emoji === emoji),
-      ),
-    );
-  } else {
-    message.reactions.push({ userId, emoji });
+  if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 32) {
+    throw new ApiError(400, "Invalid reaction emoji");
   }
+  const reactionMatch = {
+    $and: [
+      { $eq: ["$$reaction.userId", userId] },
+      { $eq: ["$$reaction.emoji", emoji] },
+    ],
+  };
+  await Message.updateOne({ _id: messageId }, [
+    {
+      $set: {
+        reactions: {
+          $let: {
+            vars: {
+              matches: {
+                $filter: {
+                  input: { $ifNull: ["$reactions", []] },
+                  as: "reaction",
+                  cond: reactionMatch,
+                },
+              },
+            },
+            in: {
+              $cond: [
+                { $gt: [{ $size: "$$matches" }, 0] },
+                {
+                  $filter: {
+                    input: { $ifNull: ["$reactions", []] },
+                    as: "reaction",
+                    cond: { $not: [reactionMatch] },
+                  },
+                },
+                {
+                  $concatArrays: [
+                    { $ifNull: ["$reactions", []] },
+                    [{ userId, emoji }],
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  ]);
+  const updatedMessage = await Message.findById(messageId);
+  if (!updatedMessage) throw new ApiError(404, "Message not found");
 
-  await message.save();
-
-  emitToConversation(
+  await emitAuthorizedMessageEvent(
     message.conversationId.toString(),
     SERVER_EVENTS.MESSAGE_REACTION,
-    message,
+    updatedMessage,
   );
 
-  return message;
+  return updatedMessage;
 };
 
 const assertMessageAccess = async (conversationId: string, userId: string) => {
@@ -428,4 +586,22 @@ const assertMessageAccess = async (conversationId: string, userId: string) => {
   ) {
     throw new ApiError(403, "This conversation is not available");
   }
+  return conversation;
+};
+
+const emitAuthorizedMessageEvent = async (
+  conversationId: string,
+  event: string,
+  payload: any,
+) => {
+  const conversation = await Conversation.findById(conversationId);
+  if (conversation?.type === "dm" && conversation.requestStatus !== "normal") {
+    if (conversation.requestStatus === "pending" && conversation.requestedBy) {
+      getIO()
+        .to(`user:${conversation.requestedBy.toString()}`)
+        .emit(event, payload);
+    }
+    return;
+  }
+  await emitToConversation(conversationId, event, payload);
 };

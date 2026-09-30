@@ -16,7 +16,7 @@ const messageSchema = new mongoose.Schema(
 
     content: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
     },
 
@@ -27,6 +27,26 @@ const messageSchema = new mongoose.Schema(
         type: String,
         enum: ["image", "video", "audio", "file"],
       },
+    },
+
+    attachments: [
+      {
+        url: { type: String, required: true },
+        filename: { type: String, required: true },
+        mimeType: { type: String, required: true },
+        size: { type: Number, required: true },
+        type: {
+          type: String,
+          enum: ["image", "video", "audio", "file"],
+          required: true,
+        },
+        publicId: String,
+      },
+    ],
+
+    clientMessageId: {
+      type: String,
+      maxlength: 128,
     },
 
     replyTo: {
@@ -60,6 +80,14 @@ const messageSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+  },
+);
+
+messageSchema.index(
+  { conversationId: 1, senderId: 1, clientMessageId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { clientMessageId: { $type: "string" } },
   },
 );
 

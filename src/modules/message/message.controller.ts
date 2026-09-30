@@ -21,34 +21,48 @@ import { sendMessage } from "./message.service";
 
 export const sendMessageController = async (req: any, res: any) => {
   try {
-    const { conversationId, content, replyTo } = req.body;
-
-    let media;
-
-    // 📎 FILE UPLOAD HANDLING
-    if (req.file) {
-      const result: any = await uploadToCloudinary(req.file.buffer);
-
-      media = {
-        url: result.secure_url,
-        name: result.original_filename || req.file.originalname,
-        type: req.file.mimetype.startsWith("image")
-          ? "image"
-          : req.file.mimetype.startsWith("video")
-            ? "video"
-            : req.file.mimetype.startsWith("audio")
-              ? "audio"
-              : "file",
-      };
+    const { conversationId, content, replyTo, clientMessageId } = req.body;
+    const idempotencyKey = req.get("Idempotency-Key") || clientMessageId;
+    const uploadedFiles: Express.Multer.File[] = req.file
+      ? [req.file]
+      : Array.isArray(req.files)
+        ? req.files
+        : (Object.values(req.files ?? {}).flat() as Express.Multer.File[]);
+    if (uploadedFiles.length > 10) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum 10 attachments per message",
+      });
     }
 
-    // 💬 SEND MESSAGE (UPDATED SERVICE CALL)
+    const attachments = await Promise.all(
+      uploadedFiles.map(async (file) => {
+        const result: any = await uploadToCloudinary(file.buffer);
+        const type = file.mimetype.startsWith("image/")
+          ? "image"
+          : file.mimetype.startsWith("video/")
+            ? "video"
+            : file.mimetype.startsWith("audio/")
+              ? "audio"
+              : "file";
+        return {
+          url: result.secure_url,
+          filename: file.originalname,
+          mimeType: file.mimetype,
+          size: Number(result.bytes) || file.size,
+          type,
+          publicId: result.public_id,
+        };
+      }),
+    );
+
     const message = await sendMessage(
       req.user.userId,
       conversationId,
       content,
       replyTo,
-      media, // 🔥 IMPORTANT: NEW PARAM ADDED
+      attachments,
+      idempotencyKey,
     );
 
     return res.status(201).json({
@@ -56,7 +70,15 @@ export const sendMessageController = async (req: any, res: any) => {
       data: message,
     });
   } catch (err: any) {
-    return res.status(err.statusCode || 500).json({
+    const statusCode =
+      err.statusCode ||
+      (err.code === "LIMIT_FILE_SIZE"
+        ? 413
+        : err.code === "LIMIT_FILE_COUNT" ||
+            err.code === "LIMIT_UNEXPECTED_FILE"
+          ? 400
+          : 500);
+    return res.status(statusCode).json({
       success: false,
       message: err.message,
     });

@@ -25,3 +25,13 @@ export const restrictConversationRoom = async (
       .map((socket) => socket.leave(room)),
   );
 };
+
+export const removeUserFromConversationRoom = async (
+  conversationId: string,
+  userId: string,
+) => {
+  const io = getIO();
+  const room = `conversation:${conversationId}`;
+  const sockets = await io.in(`user:${userId}`).fetchSockets();
+  await Promise.all(sockets.map((socket) => socket.leave(room)));
+};

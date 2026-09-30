@@ -9,7 +9,13 @@ export const errorHandler = (
 
   next: NextFunction,
 ) => {
-  const statusCode = err.statusCode || 500;
+  const statusCode =
+    err.statusCode ||
+    (err.code === "LIMIT_FILE_SIZE"
+      ? 413
+      : err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE"
+        ? 400
+        : 500);
 
   res.status(statusCode).json({
     success: false,

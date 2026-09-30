@@ -20,7 +20,7 @@ export const getUsers = async (req: Request, res: Response) => {
 
 export const getUser = async (req: Request, res: Response) => {
   try {
-    const user = await userService.getUserById(req.params.id);
+    const user = await userService.getUserById(String(req.params.id));
 
     res.json({
       success: true,

@@ -55,7 +55,7 @@ export const sendMessageController = async (req: any, res: any) => {
       data: message,
     });
   } catch (err: any) {
-    return res.status(500).json({
+    return res.status(err.statusCode || 500).json({
       success: false,
       message: err.message,
     });
@@ -66,6 +66,7 @@ export const getMessagesController = async (req: Request, res: Response) => {
   const { conversationId, page, limit } = req.query;
 
   const messages = await service.getMessages(
+    (req as any).user.userId,
     conversationId as string,
     Number(page) || 1,
     Number(limit) || 20,

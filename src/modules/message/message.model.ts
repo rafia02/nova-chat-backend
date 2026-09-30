@@ -20,6 +20,14 @@ const messageSchema = new mongoose.Schema(
       trim: true,
     },
 
+    media: {
+      url: String,
+      type: {
+        type: String,
+        enum: ["image", "video", "audio", "file"],
+      },
+    },
+
     replyTo: {
       messageId: String,
       content: String,

@@ -16,6 +16,14 @@ export const CLIENT_EVENTS = {
 };
 
 export const SERVER_EVENTS = {
+  FRIEND_REQUEST_NEW: "friend-request:new",
+  FRIEND_REQUEST_ACCEPTED: "friend-request:accepted",
+  FRIEND_REQUEST_REJECTED: "friend-request:rejected",
+  FRIEND_REMOVED: "friend:removed",
+  MESSAGE_REQUEST_NEW: "message-request:new",
+  MESSAGE_REQUEST_ACCEPTED: "message-request:accepted",
+  MESSAGE_REQUEST_REJECTED: "message-request:rejected",
+
   MESSAGE_NEW: "message:new",
   MESSAGE_UPDATED: "message:updated",
   MESSAGE_DELETED: "message:deleted",

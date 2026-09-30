@@ -8,6 +8,24 @@ const conversationSchema = new mongoose.Schema(
       required: true,
     },
 
+    dmKey: {
+      type: String,
+      select: false,
+    },
+
+    requestStatus: {
+      type: String,
+      enum: ["normal", "pending", "rejected"],
+      default: "normal",
+      required: true,
+    },
+
+    requestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     participants: [
       {
         type: mongoose.Schema.Types.ObjectId,
@@ -37,5 +55,7 @@ const conversationSchema = new mongoose.Schema(
   },
   { timestamps: true },
 );
+
+conversationSchema.index({ dmKey: 1 }, { unique: true, sparse: true });
 
 export const Conversation = mongoose.model("Conversation", conversationSchema);

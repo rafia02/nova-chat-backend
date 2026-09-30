@@ -14,6 +14,15 @@ router.delete("/delete", auth, controller.deleteMessageController);
 
 router.post("/react", auth, controller.reactMessageController);
 
-router.post("/send", auth, upload.single("file"), sendMessageController);
+router.post(
+  "/send",
+  auth,
+  upload.fields([
+    { name: "file", maxCount: 10 },
+    { name: "files", maxCount: 10 },
+    { name: "attachments", maxCount: 10 },
+  ]),
+  sendMessageController,
+);
 
 export default router;

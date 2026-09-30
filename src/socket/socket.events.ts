@@ -10,7 +10,9 @@ export const CLIENT_EVENTS = {
   MESSAGE_SEEN: "message:seen",
 
   CALL_START: "call:start",
+  CALL_INITIATE: "call:initiate",
   CALL_ACCEPT: "call:accept",
+  CALL_REJECT: "call:reject",
   CALL_END: "call:end",
   CALL_SIGNAL: "call:signal",
 };
@@ -23,6 +25,10 @@ export const SERVER_EVENTS = {
   MESSAGE_REQUEST_NEW: "message-request:new",
   MESSAGE_REQUEST_ACCEPTED: "message-request:accepted",
   MESSAGE_REQUEST_REJECTED: "message-request:rejected",
+  GROUP_CREATED: "group:created",
+  GROUP_UPDATED: "group:updated",
+  GROUP_MEMBER_ADDED: "group:member-added",
+  GROUP_MEMBER_REMOVED: "group:member-removed",
 
   MESSAGE_NEW: "message:new",
   MESSAGE_UPDATED: "message:updated",
@@ -36,4 +42,9 @@ export const SERVER_EVENTS = {
 
   MESSAGE_DELIVERED: "message:delivered",
   MESSAGE_SEEN: "message:seen",
+  CALL_INCOMING: "call:incoming",
+  CALL_ACCEPTED: "call:accepted",
+  CALL_REJECTED: "call:rejected",
+  CALL_ENDED: "call:ended",
+  CALL_BUSY: "call:busy",
 };

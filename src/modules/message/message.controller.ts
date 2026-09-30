@@ -31,6 +31,7 @@ export const sendMessageController = async (req: any, res: any) => {
 
       media = {
         url: result.secure_url,
+        name: result.original_filename || req.file.originalname,
         type: req.file.mimetype.startsWith("image")
           ? "image"
           : req.file.mimetype.startsWith("video")

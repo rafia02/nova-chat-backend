@@ -5,6 +5,8 @@ import { addOnlineSocket, removeOnlineSocket } from "./presence";
 import { AuthenticatedSocket } from "./socket.types";
 import { Conversation } from "../modules/conversation/conversation.model";
 import { Message } from "../modules/message/message.model";
+import { User } from "../modules/user/user.model";
+import { sendMessage } from "../modules/message/message.service";
 import {
   acceptCall,
   endCall,
@@ -82,14 +84,21 @@ const markMessagesDelivered = async (
 };
 
 export const setupSocket = (io: Server) => {
-  io.use((socket: AuthenticatedSocket, next) => {
-    const token = socket.handshake.auth?.token;
-    const decoded = verifyToken(token);
+  io.use(async (socket: AuthenticatedSocket, next) => {
+    try {
+      const token = socket.handshake.auth?.token;
+      const decoded = verifyToken(token);
 
-    if (!decoded) return next(new Error("Unauthorized"));
+      if (!decoded) return next(new Error("Unauthorized"));
+      if (!(await User.exists({ _id: decoded.userId }))) {
+        return next(new Error("Unauthorized"));
+      }
 
-    socket.userId = decoded.userId;
-    next();
+      socket.userId = decoded.userId;
+      next();
+    } catch (error) {
+      next(error instanceof Error ? error : new Error("Unauthorized"));
+    }
   });
 
   io.on("connection", (socket: AuthenticatedSocket) => {
@@ -100,9 +109,44 @@ export const setupSocket = (io: Server) => {
 
     socket.join(`user:${userId}`);
 
-    if (becameOnline) io.emit(SERVER_EVENTS.USER_ONLINE, { userId });
+    if (becameOnline) {
+      void User.findByIdAndUpdate(userId, {
+        $set: { status: "online", lastSeen: null },
+      }).catch((error) => {
+        console.error("Failed to update online status:", error);
+      });
+      io.emit(SERVER_EVENTS.USER_ONLINE, { userId });
+    }
 
     console.log("User online:", userId);
+
+    socket.on(CLIENT_EVENTS.MESSAGE_SEND, async (data: any, acknowledge: any) => {
+      try {
+        if (!data || typeof data !== "object") {
+          throw new Error("Invalid message payload");
+        }
+        const message = await sendMessage(
+          userId,
+          data.conversationId,
+          data.content,
+          data.replyTo,
+          undefined,
+          data.clientMessageId,
+        );
+        if (typeof acknowledge === "function") {
+          acknowledge({ success: true, data: message });
+        }
+      } catch (error: any) {
+        if (typeof acknowledge === "function") {
+          acknowledge({
+            success: false,
+            message: error.message || "Unable to send message",
+          });
+        } else {
+          console.error("Socket message send failed:", error);
+        }
+      }
+    });
 
     // JOIN ROOM
     socket.on(CLIENT_EVENTS.JOIN, async (conversationId: string) => {
@@ -256,7 +300,18 @@ export const setupSocket = (io: Server) => {
     // DISCONNECT
     socket.on("disconnect", async () => {
       if (removeOnlineSocket(userId, socket.id)) {
-        await handleCallDisconnect(io, userId);
+        try {
+          await handleCallDisconnect(io, userId);
+        } catch (error) {
+          console.error("Failed to clean up disconnected calls:", error);
+        }
+        try {
+          await User.findByIdAndUpdate(userId, {
+            $set: { status: "offline", lastSeen: new Date() },
+          });
+        } catch (error) {
+          console.error("Failed to update offline status:", error);
+        }
         io.emit(SERVER_EVENTS.USER_OFFLINE, { userId });
       }
 

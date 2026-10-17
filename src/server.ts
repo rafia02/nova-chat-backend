@@ -17,7 +17,7 @@ const startServer = async () => {
 
   const io = new Server(httpServer, {
     cors: {
-      origin: "http://localhost:3000",
+      origin: env.CORS_ORIGINS,
       credentials: true,
     },
   });
@@ -25,9 +25,17 @@ const startServer = async () => {
   initSocket(io);
   setupSocket(io);
 
-  httpServer.listen(env.PORT, () => {
-    console.log(`🚀 Server running on ${env.PORT}`);
+  await new Promise<void>((resolve, reject) => {
+    httpServer.once("error", reject);
+    httpServer.listen(env.PORT, () => {
+      httpServer.off("error", reject);
+      resolve();
+    });
   });
+  console.log(`Server running on port ${env.PORT}`);
 };
 
-startServer();
+startServer().catch((error: unknown) => {
+  console.error("Server startup failed:", error);
+  process.exitCode = 1;
+});

@@ -5,7 +5,10 @@ import { ApiError } from "../../utils/ApiError";
 import { areFriends } from "../friend/friend.service";
 import { getIO } from "../../socket/socket";
 import { SERVER_EVENTS } from "../../socket/socket.events";
-import { removeUserFromConversationRoom } from "../../socket/socket";
+import {
+  removeUserFromConversationRoom,
+  restrictConversationRoom,
+} from "../../socket/socket";
 
 const getDmKey = (firstId: string, secondId: string) =>
   [firstId.toString().toLowerCase(), secondId.toString().toLowerCase()]
@@ -33,10 +36,14 @@ export const createDM = async (userId: string, otherId: string) => {
       participants: { $all: [userId, otherId], $size: 2 },
     });
     if (convo) {
-      convo.requestStatus = "normal";
-      convo.requestedBy = null;
       convo.dmKey = dmKey;
       await convo.save();
+      if (convo.requestStatus === "pending") {
+        await restrictConversationRoom(
+          convo._id.toString(),
+          convo.requestedBy?.toString(),
+        );
+      }
       return convo;
     }
   }
@@ -130,6 +137,14 @@ const assertGroupAdmin = async (conversation: any, userId: string) => {
   }
 };
 
+export const assertCanUpdateGroup = async (
+  conversationId: string,
+  userId: string,
+) => {
+  const conversation = await getGroupForMember(conversationId, userId);
+  await assertGroupAdmin(conversation, userId);
+};
+
 const emitGroupUpdate = (
   conversation: any,
   event: string,
@@ -162,6 +177,13 @@ export const getConversation = async (
     .populate("participants", "name avatar status")
     .populate("admins", "name avatar");
   if (!conversation) throw new ApiError(404, "Conversation not found");
+  if (
+    conversation.requestStatus === "rejected" ||
+    (conversation.requestStatus === "pending" &&
+      conversation.requestedBy?.toString() !== userId)
+  ) {
+    throw new ApiError(403, "This conversation is not available");
+  }
   return conversation;
 };
 
@@ -263,16 +285,17 @@ export const removeGroupMember = async (
   const remainingAdmins = conversation.admins
     .map((admin) => admin.toString())
     .filter((adminId) => adminId !== memberId);
-  if (
-    isSelf &&
-    conversation.admins.some((admin) => admin.toString() === memberId) &&
-    remainingIds.length > 0 &&
-    remainingAdmins.length === 0
-  ) {
+  if (remainingIds.length > 0 && remainingAdmins.length === 0) {
     remainingAdmins.push(remainingIds[0]);
   }
+  const removalFilter: Record<string, unknown> = {
+    _id: conversationId,
+    type: "group",
+    participants: actorId,
+  };
+  if (!isSelf) removalFilter.admins = actorId;
   const updated = await Conversation.findOneAndUpdate(
-    { _id: conversationId, type: "group", participants: actorId },
+    removalFilter,
     { $pull: { participants: memberId, admins: memberId } },
     { new: true },
   );

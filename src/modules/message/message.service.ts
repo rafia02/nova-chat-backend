@@ -173,6 +173,29 @@ const emitToConversation = async (
   target.emit(event, data);
 };
 
+const messagePreview = (message: any) => {
+  if (message.isDeleted) return "This message was deleted";
+  if (message.attachments?.length) {
+    return message.attachments[0].type === "audio"
+      ? "Voice message"
+      : "Attachment";
+  }
+  return message.content;
+};
+
+const refreshConversationPreview = async (conversationId: string) => {
+  const latest = await Message.findOne({
+    conversationId,
+    isDeleted: { $ne: true },
+  }).sort({ createdAt: -1, _id: -1 });
+  await Conversation.findByIdAndUpdate(conversationId, {
+    $set: {
+      lastMessage: latest ? messagePreview(latest) : "",
+      lastMessageAt: latest?.createdAt ?? null,
+    },
+  });
+};
+
 /* ---------------------------
    SEND MESSAGE
 ----------------------------*/
@@ -230,6 +253,29 @@ export const sendMessage = async (
       }
       return existing;
     }
+  }
+
+  let replySnapshot;
+  if (replyTo !== undefined && replyTo !== null) {
+    const replyId =
+      typeof replyTo === "string" ? replyTo : replyTo?.messageId;
+    if (typeof replyId !== "string" || !/^[0-9a-fA-F]{24}$/.test(replyId)) {
+      throw new ApiError(400, "Invalid replied-to message ID");
+    }
+    const repliedMessage = await Message.findOne({
+      _id: replyId,
+      conversationId,
+    });
+    if (!repliedMessage) {
+      throw new ApiError(404, "Replied-to message not found");
+    }
+    replySnapshot = {
+      messageId: repliedMessage._id.toString(),
+      content: repliedMessage.isDeleted
+        ? "This message was deleted"
+        : repliedMessage.content,
+      senderId: repliedMessage.senderId.toString(),
+    };
   }
 
   let isMessageRequest = false;
@@ -292,7 +338,7 @@ export const sendMessage = async (
       senderId,
       conversationId,
       content: messageContent,
-      replyTo,
+      replyTo: replySnapshot,
       media: attachments[0]
         ? {
             url: attachments[0].url,
@@ -398,6 +444,11 @@ export const sendMessage = async (
   return message;
 };
 
+export const assertCanSendMessage = async (
+  conversationId: string,
+  userId: string,
+) => assertMessageAccess(conversationId, userId);
+
 /* ---------------------------
    GET MESSAGES
 ----------------------------*/
@@ -410,21 +461,7 @@ export const getMessages = async (
   if (!/^[0-9a-fA-F]{24}$/.test(conversationId)) {
     throw new ApiError(400, "Invalid conversation ID");
   }
-  const conversation = await Conversation.findById(conversationId);
-  if (!conversation) throw new ApiError(404, "Conversation not found");
-  if (
-    !conversation.participants.some(
-      (participant) => participant.toString() === userId,
-    )
-  ) {
-    throw new ApiError(403, "Not a conversation participant");
-  }
-  if (conversation.requestStatus === "rejected") {
-    throw new ApiError(
-      403,
-      "Messages are unavailable because the request was rejected",
-    );
-  }
+  await assertMessageAccess(conversationId, userId);
 
   const safePage = Number.isInteger(page) && page > 0 ? page : 1;
   const safeLimit =
@@ -432,7 +469,7 @@ export const getMessages = async (
   const skip = (safePage - 1) * safeLimit;
 
   const messages = await Message.find({ conversationId })
-    .sort({ createdAt: -1 })
+    .sort({ createdAt: -1, _id: -1 })
     .skip(skip)
     .limit(safeLimit);
 
@@ -447,6 +484,12 @@ export const editMessage = async (
   userId: string,
   content: string,
 ) => {
+  if (!/^[0-9a-fA-F]{24}$/.test(messageId)) {
+    throw new ApiError(400, "Invalid message ID");
+  }
+  if (typeof content !== "string" || !content.trim() || content.length > 10_000) {
+    throw new ApiError(400, "Message must contain 1 to 10000 characters");
+  }
   const message = await Message.findById(messageId);
 
   if (!message) throw new ApiError(404, "Message not found");
@@ -459,6 +502,7 @@ export const editMessage = async (
   message.editedAt = new Date();
 
   await message.save();
+  await refreshConversationPreview(message.conversationId.toString());
 
   await emitAuthorizedMessageEvent(
     message.conversationId.toString(),
@@ -473,6 +517,9 @@ export const editMessage = async (
    DELETE MESSAGE
 ----------------------------*/
 export const deleteMessage = async (messageId: string, userId: string) => {
+  if (!/^[0-9a-fA-F]{24}$/.test(messageId)) {
+    throw new ApiError(400, "Invalid message ID");
+  }
   const message = await Message.findById(messageId);
 
   if (!message) throw new ApiError(404, "Message not found");
@@ -485,6 +532,7 @@ export const deleteMessage = async (messageId: string, userId: string) => {
   message.content = "This message was deleted";
 
   await message.save();
+  await refreshConversationPreview(message.conversationId.toString());
 
   await emitAuthorizedMessageEvent(
     message.conversationId.toString(),
@@ -506,6 +554,9 @@ export const reactMessage = async (
   userId: string,
   emoji: string,
 ) => {
+  if (!/^[0-9a-fA-F]{24}$/.test(messageId)) {
+    throw new ApiError(400, "Invalid message ID");
+  }
   const message = await Message.findById(messageId);
 
   if (!message) throw new ApiError(404, "Message not found");

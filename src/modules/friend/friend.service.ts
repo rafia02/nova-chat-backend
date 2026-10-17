@@ -103,7 +103,7 @@ export const acceptFriendRequest = async (
         {
           type: "dm",
           participants: { $all: [request.senderId, userId], $size: 2 },
-          requestStatus: "pending",
+          requestStatus: { $in: ["pending", "rejected"] },
         },
         { $set: { requestStatus: "normal", requestedBy: null } },
         { session },

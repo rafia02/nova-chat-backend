@@ -1,11 +1,18 @@
 import jwt from "jsonwebtoken";
-
-const ACCESS_SECRET = process.env.JWT_ACCESS_SECRET || "secret";
+import { env } from "../config/env";
 
 export const generateToken = (userId: string) => {
-  return jwt.sign({ userId }, ACCESS_SECRET, { expiresIn: "7d" });
+  return jwt.sign({ userId }, env.JWT_ACCESS_SECRET, { expiresIn: "7d" });
 };
 
 export const verifyToken = (token: string) => {
-  return jwt.verify(token, ACCESS_SECRET);
+  const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET);
+  if (
+    typeof decoded !== "object" ||
+    typeof decoded.userId !== "string" ||
+    !/^[0-9a-fA-F]{24}$/.test(decoded.userId)
+  ) {
+    throw new Error("Invalid token payload");
+  }
+  return { userId: decoded.userId };
 };

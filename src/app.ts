@@ -8,6 +8,8 @@ import { notFound } from "./modules/notFound";
 import { errorHandler } from "./modules/error";
 import router from "./routes";
 
+// app
+
 const app = express();
 
 app.use(helmet());

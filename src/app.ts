@@ -8,7 +8,7 @@ import { notFound } from "./modules/notFound";
 import { errorHandler } from "./modules/error";
 import router from "./routes";
 
-// app
+// app...
 
 const app = express();
 
